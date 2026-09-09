@@ -28,6 +28,7 @@ import { convertResponsesMessages, convertResponsesTools, processResponsesStream
 import { buildBaseOptions } from "./simple-options.ts";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
+const OPENAI_NATIVE_COMPACTION_THRESHOLD = 272_000;
 // OpenAI Responses rejects max_output_tokens below 16: https://github.com/earendil-works/pi/issues/6265
 const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16;
 
@@ -90,6 +91,7 @@ function formatOpenAIResponsesError(error: unknown): string {
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+	nativeCompaction?: boolean;
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 	toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
@@ -207,6 +209,7 @@ export const streamSimple: StreamFunction<"openai-responses", SimpleStreamOption
 	return stream(model, context, {
 		...base,
 		reasoningEffort,
+		nativeCompaction: options?.nativeCompaction,
 	} satisfies OpenAIResponsesOptions);
 };
 
@@ -285,6 +288,10 @@ function buildParams(
 		prompt_cache_options: disableImplicitPromptCache ? { mode: "explicit" } : undefined,
 		store: false,
 	};
+
+	if (options?.nativeCompaction !== false && model.provider === "openai" && model.id.startsWith("gpt-5.6-")) {
+		params.context_management = [{ type: "compaction", compact_threshold: OPENAI_NATIVE_COMPACTION_THRESHOLD }];
+	}
 
 	if (options?.maxTokens) {
 		params.max_output_tokens = Math.max(options.maxTokens, OPENAI_RESPONSES_MIN_OUTPUT_TOKENS);

@@ -311,6 +311,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const headerRunner = extensionRunnerRef.current;
 			return modelRuntime.streamSimple(model, context, {
 				...options,
+				nativeCompaction: settingsManager.getCompactionEnabled(),
 				timeoutMs,
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,

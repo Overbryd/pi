@@ -66,6 +66,7 @@ const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS = 15_000;
 // endpoint (the same endpoint the official Codex client compresses against).
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
+const OPENAI_NATIVE_COMPACTION_THRESHOLD = 272_000;
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
 const PREVIOUS_RESPONSE_NOT_FOUND_CODE = "previous_response_not_found";
@@ -85,6 +86,7 @@ const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+	nativeCompaction?: boolean;
 	reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 	textVerbosity?: "low" | "medium" | "high";
@@ -520,6 +522,7 @@ export const streamSimple: StreamFunction<"openai-codex-responses", SimpleStream
 	return stream(model, context, {
 		...base,
 		reasoningEffort,
+		nativeCompaction: options?.nativeCompaction,
 	} satisfies OpenAICodexResponsesOptions);
 };
 
@@ -563,6 +566,10 @@ function buildRequestBody(
 		tool_choice: options?.toolChoice ?? "auto",
 		parallel_tool_calls: true,
 	};
+
+	if (options?.nativeCompaction !== false && model.provider === "openai-codex" && model.id.startsWith("gpt-5.6-")) {
+		body.context_management = [{ type: "compaction", compact_threshold: OPENAI_NATIVE_COMPACTION_THRESHOLD }];
+	}
 
 	if (options?.temperature !== undefined) {
 		body.temperature = options.temperature;

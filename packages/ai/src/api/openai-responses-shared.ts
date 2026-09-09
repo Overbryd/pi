@@ -334,7 +334,21 @@ export function convertResponsesMessages<TApi extends Api>(
 		msgIndex++;
 	}
 
-	return messages;
+	let latestCompactionIndex = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const item = messages[i];
+		if ("type" in item && item.type === "compaction") {
+			latestCompactionIndex = i;
+			break;
+		}
+	}
+	if (latestCompactionIndex === -1) return messages;
+
+	// The latest encrypted compaction item carries all preceding conversation
+	// state. Keep the system/developer prompt, then send only that item onward.
+	const compacted = messages.slice(latestCompactionIndex);
+	if (includeSystemPrompt && context.systemPrompt) compacted.unshift(messages[0]);
+	return compacted;
 }
 
 // =============================================================================
@@ -408,6 +422,7 @@ function appendCustomToolCallInput(block: StreamingToolCall, nextInput: string, 
 
 type ResponsesOutputSlot =
 	| { type: "thinking"; block: ThinkingContent; contentIndex: number }
+	| { type: "compaction"; block: ThinkingContent; contentIndex: number }
 	| { type: "text"; block: TextContent; contentIndex: number }
 	| { type: "toolCall"; block: StreamingToolCall; contentIndex: number };
 
@@ -455,6 +470,19 @@ export async function processResponsesStream<TApi extends Api>(
 			} satisfies ResponsesOutputSlot;
 			outputSlots.set(outputIndex, slot);
 			stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
+			return slot;
+		}
+		if (item.type === "compaction") {
+			// Pi has no first-class opaque context item. Persist native compaction in
+			// the same hidden signature channel used for encrypted reasoning.
+			const block: ThinkingContent = { type: "thinking", thinking: "" };
+			output.content.push(block);
+			const slot = {
+				type: "compaction",
+				block,
+				contentIndex: output.content.length - 1,
+			} satisfies ResponsesOutputSlot;
+			outputSlots.set(outputIndex, slot);
 			return slot;
 		}
 		if (item.type === "message") {
@@ -676,6 +704,9 @@ export async function processResponsesStream<TApi extends Api>(
 					content: slot.block.thinking,
 					partial: output,
 				});
+				outputSlots.delete(event.output_index);
+			} else if (item.type === "compaction" && slot?.type === "compaction") {
+				slot.block.thinkingSignature = JSON.stringify(item);
 				outputSlots.delete(event.output_index);
 			} else if (item.type === "message" && slot?.type === "text") {
 				slot.block.text = item.content?.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("") || "";

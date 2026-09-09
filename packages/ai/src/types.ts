@@ -305,6 +305,8 @@ export interface SimpleStreamOptions extends StreamOptions {
 	reasoning?: ThinkingLevel;
 	/** Ask a capable provider to return a durable handle and continue the request asynchronously. */
 	deferred?: boolean | { window?: "15m" | "1h" | "24h" };
+	/** Enable provider-native context compaction when supported. */
+	nativeCompaction?: boolean;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
 }

@@ -110,6 +110,14 @@ import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
 
+export function usesNativeOpenAICompaction(model: Model<any> | undefined): boolean {
+	if (!model?.id.startsWith("gpt-5.6-")) return false;
+	return (
+		(model.provider === "openai" && model.api === "openai-responses") ||
+		(model.provider === "openai-codex" && model.api === "openai-codex-responses")
+	);
+}
+
 // ============================================================================
 // Skill Block Parsing
 // ============================================================================
@@ -1990,8 +1998,16 @@ export class AgentSession {
 		// independent of the configured context size or any context-clamped provider request limit.
 		// A successful response over the configured window should compact but must not retry: the
 		// assistant answer already completed and agent.continue() cannot continue from an assistant.
+		// Provider-native compaction already shrank the context for a successful response, so Pi must
+		// not add a textual compaction on top of it.
 		const recoverableLength = sameModel && isRecoverableLength(assistantMessage, this.model?.maxTokens ?? 0);
-		if (sameModel && (isContextOverflow(assistantMessage, contextWindow) || recoverableLength)) {
+		const nativeCompaction = usesNativeOpenAICompaction(this.model);
+		const nativeHandledSuccessfulOverflow = nativeCompaction && assistantMessage.stopReason === "stop";
+		if (
+			sameModel &&
+			!nativeHandledSuccessfulOverflow &&
+			(isContextOverflow(assistantMessage, contextWindow) || recoverableLength)
+		) {
 			const willRetry = assistantMessage.stopReason !== "stop";
 
 			if (!willRetry) {
@@ -2046,7 +2062,7 @@ export class AgentSession {
 		} else {
 			contextTokens = directContextTokens;
 		}
-		if (shouldCompact(contextTokens, contextWindow, settings)) {
+		if (!nativeCompaction && shouldCompact(contextTokens, contextWindow, settings)) {
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
