@@ -991,6 +991,7 @@ export class SessionManager {
 	private cwd: string;
 	private persist: boolean;
 	private flushed: boolean = false;
+	private persistenceBufferStart: number | undefined;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
@@ -1074,6 +1075,7 @@ export class SessionManager {
 		this.labelTimestampsById.clear();
 		this.leafId = null;
 		this.flushed = false;
+		this.persistenceBufferStart = undefined;
 
 		if (this.persist) {
 			const fileTimestamp = timestamp.replace(/[:.]/g, "-");
@@ -1170,7 +1172,7 @@ export class SessionManager {
 	}
 
 	_persist(entry: SessionEntry): void {
-		if (!this.persist || !this.sessionFile) return;
+		if (!this.persist || !this.sessionFile || this.persistenceBufferStart !== undefined) return;
 
 		if (!this.flushed) {
 			if (!this._hasConversation()) return;
@@ -1186,6 +1188,50 @@ export class SessionManager {
 		} else {
 			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
 		}
+	}
+
+	/** Hold subsequent entries in memory until a retry decision is known. */
+	beginPersistenceBuffer(): void {
+		if (this.persistenceBufferStart !== undefined) return;
+		this.persistenceBufferStart = this.fileEntries.length;
+	}
+
+	get isPersistenceBuffered(): boolean {
+		return this.persistenceBufferStart !== undefined;
+	}
+
+	/**
+	 * Flush buffered entries, optionally omitting entries that should never reach raw history.
+	 * Retained descendants are reparented to the nearest retained ancestor.
+	 */
+	flushPersistenceBuffer(omitEntryIds: readonly string[] = []): void {
+		const start = this.persistenceBufferStart;
+		if (start === undefined) return;
+		this.persistenceBufferStart = undefined;
+
+		const omitted = new Set(omitEntryIds);
+		for (const entry of this.fileEntries.slice(start)) {
+			if (entry.type === "context_edit" && omitted.has(entry.targetId)) omitted.add(entry.id);
+		}
+		if (omitted.size > 0) {
+			const entriesById = new Map(
+				this.fileEntries
+					.filter((entry): entry is SessionEntry => entry.type !== "session")
+					.map((entry) => [entry.id, entry]),
+			);
+			const retained = this.fileEntries.slice(start).flatMap((entry) => {
+				if (entry.type === "session" || omitted.has(entry.id)) return [];
+				let parentId = entry.parentId;
+				while (parentId && omitted.has(parentId)) parentId = entriesById.get(parentId)?.parentId ?? null;
+				return [{ ...entry, parentId } as SessionEntry];
+			});
+			this.fileEntries = [...this.fileEntries.slice(0, start), ...retained];
+			this._buildIndex();
+		}
+
+		if (!this.persist || !this.sessionFile || !this._hasConversation()) return;
+		this._rewriteFile();
+		this.flushed = true;
 	}
 
 	private _appendEntry(entry: SessionEntry): void {

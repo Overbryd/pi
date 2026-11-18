@@ -1,7 +1,11 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import { SessionManager } from "../../src/core/session-manager.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
 function normalizeEventOrder(events: Harness["events"]): string[] {
@@ -23,10 +27,14 @@ function normalizeEventOrder(events: Harness["events"]): string[] {
 
 describe("AgentSession retry and event characterization", () => {
 	const harnesses: Harness[] = [];
+	const tempDirs: string[] = [];
 
 	afterEach(() => {
 		while (harnesses.length > 0) {
 			harnesses.pop()?.cleanup();
+		}
+		while (tempDirs.length > 0) {
+			rmSync(tempDirs.pop()!, { recursive: true, force: true });
 		}
 	});
 
@@ -50,6 +58,32 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.eventsOfType("agent_end").map((event) => event.willRetry)).toEqual([true, false]);
 		expect(harness.faux.state.callCount).toBe(2);
 		expect(harness.session.isRetrying).toBe(false);
+		const entries = harness.sessionManager.getEntries();
+		expect(entries.filter((entry) => entry.type === "message" && entry.message.role === "assistant")).toHaveLength(1);
+		expect(entries.some((entry) => entry.type === "context_edit")).toBe(false);
+	});
+
+	it("never writes intermediate transient failures to the session log", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-retry-log-"));
+		tempDirs.push(dir);
+		const sessionManager = SessionManager.create(dir, join(dir, "sessions"));
+		const harness = await createHarness({
+			sessionManager,
+			settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } },
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage("failed partial", { stopReason: "error", errorMessage: "overloaded_error" }),
+			fauxAssistantMessage("recovered"),
+		]);
+
+		await harness.session.prompt("test");
+
+		const log = readFileSync(sessionManager.getSessionFile()!, "utf8");
+		expect(log).not.toContain("failed partial");
+		expect(log).not.toContain("overloaded_error");
+		expect(log).not.toContain('"type":"context_edit"');
+		expect(log).toContain("recovered");
 	});
 
 	it("retries multiple transient failures and succeeds on the final attempt", async () => {
@@ -71,6 +105,30 @@ describe("AgentSession retry and event characterization", () => {
 
 		expect(retryEvents).toEqual(["start:1", "start:2", "end:true"]);
 		expect(harness.faux.state.callCount).toBe(3);
+		const entries = harness.sessionManager.getEntries();
+		expect(entries.filter((entry) => entry.type === "message" && entry.message.role === "assistant")).toHaveLength(1);
+		expect(entries.some((entry) => entry.type === "context_edit")).toBe(false);
+	});
+
+	it("supports unlimited retries until success", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: -1, baseDelayMs: 0 } } });
+		harnesses.push(harness);
+		harness.setResponses([
+			...Array.from({ length: 5 }, () =>
+				fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+			),
+			fauxAssistantMessage("recovered"),
+		]);
+
+		await harness.session.prompt("test");
+
+		expect(harness.faux.state.callCount).toBe(6);
+		expect(harness.eventsOfType("auto_retry_start").map((event) => event.maxAttempts)).toEqual([-1, -1, -1, -1, -1]);
+		expect(
+			harness.sessionManager
+				.getEntries()
+				.filter((entry) => entry.type === "message" && entry.message.role === "assistant"),
+		).toHaveLength(1);
 	});
 
 	// Regression test for #9340.
@@ -120,6 +178,11 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.eventsOfType("agent_end").map((event) => event.willRetry)).toEqual([true, true, false]);
 		expect(harness.faux.state.callCount).toBe(3);
 		expect(harness.session.isRetrying).toBe(false);
+		const assistantEntries = harness.sessionManager
+			.getEntries()
+			.flatMap((entry) => (entry.type === "message" && entry.message.role === "assistant" ? [entry] : []));
+		expect(assistantEntries).toHaveLength(1);
+		expect(assistantEntries[0]?.message).toMatchObject({ stopReason: "error" });
 	});
 
 	it("prompt waits for retry completion even when assistant message_end handling is delayed", async () => {

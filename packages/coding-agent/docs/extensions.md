@@ -214,7 +214,8 @@ The built-in MCP support connects registered servers. When nothing does, because
 `ExtensionContext` provides the working directory, mode, UI, session manager, model runtime, abort signal, context usage, and controls for compaction and shutdown.
 Use `ctx.modelRegistry.streamSimple()` for provider-neutral nested model calls.
 
-Command handlers receive `ExtensionCommandContext`, which adds operations for waiting until idle, reloading, tree navigation, and session replacement.
+Command handlers receive `ExtensionCommandContext`, which adds operations for waiting until idle, reloading, tree navigation, failed-response retry, and session replacement.
+`ctx.retryLastTurn()` omits the latest failed response from model context and retries it with the current model and thinking level. The active branch continues in place and no duplicate user message is appended. Any tools selected by the retried response may execute again.
 These operations are command-only because calling them from lifecycle handlers can deadlock the runtime.
 
 Session replacement invalidates the old context. Capture only plain data before switching, then use the fresh context supplied to `withSession` for session-bound work.

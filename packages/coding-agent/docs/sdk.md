@@ -69,6 +69,8 @@ A steering message enters after the current assistant turn and its tool calls. A
 
 `abort()` stops the active operation and waits for the session to become idle. `waitForIdle()` waits without aborting it.
 
+`retryLastTurn()` omits the latest failed response from model context and retries it with the session's current model and thinking level. It continues the active branch without appending a duplicate user message. Any tools selected by the retried response may execute again.
+
 ## Subscribing to events
 
 Subscribe before prompting when the host needs streamed output:

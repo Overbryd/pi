@@ -99,7 +99,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			const apiKey = resolveApiKey(options);
 			// Create the client using either a Vertex API key, if provided, or ADC with project and location
 			const client = apiKey
-				? createClientWithApiKey(model, apiKey, options?.headers)
+				? createClientWithApiKey(model, apiKey, options)
 				: createClient(model, resolveProject(options), resolveLocation(options), options?.headers, options?.env);
 			let params = buildParams(model, normalizedContext, options);
 			const nextParams = await options?.onPayload?.(params, model);
@@ -375,13 +375,19 @@ function createClient(
 function createClientWithApiKey(
 	model: Model<"google-vertex">,
 	apiKey: string,
-	optionsHeaders?: ProviderHeaders,
+	options?: GoogleVertexOptions,
 ): GoogleGenAI {
+	const project =
+		options?.project ||
+		getProviderEnvValue("GOOGLE_CLOUD_PROJECT", options?.env) ||
+		getProviderEnvValue("GCLOUD_PROJECT", options?.env);
+	const location = options?.location || getProviderEnvValue("GOOGLE_CLOUD_LOCATION", options?.env);
 	return new GoogleGenAI({
 		vertexai: true,
 		apiKey,
+		...(project && location ? { project, location } : {}),
 		apiVersion: API_VERSION,
-		httpOptions: buildHttpOptions(model, optionsHeaders),
+		httpOptions: buildHttpOptions(model, options?.headers),
 	});
 }
 
@@ -427,11 +433,11 @@ function buildGoogleAuthOptions(env?: ProviderEnv): { keyFilename: string } | un
 }
 
 function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
-	const apiKey = options?.apiKey?.trim();
-	if (!apiKey || apiKey === GCP_VERTEX_CREDENTIALS_MARKER || isPlaceholderApiKey(apiKey)) {
-		return undefined;
+	for (const value of [options?.apiKey, getProviderEnvValue("GOOGLE_CLOUD_API_KEY", options?.env)]) {
+		const apiKey = value?.trim();
+		if (apiKey && apiKey !== GCP_VERTEX_CREDENTIALS_MARKER && !isPlaceholderApiKey(apiKey)) return apiKey;
 	}
-	return apiKey;
+	return undefined;
 }
 
 function isPlaceholderApiKey(apiKey: string): boolean {
@@ -483,6 +489,7 @@ function buildParams(
 			: undefined;
 	const systemInstruction = initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "";
 	const config: GenerateContentConfig = {
+		...(options.timeoutMs !== undefined && { httpOptions: { timeout: options.timeoutMs } }),
 		...(Object.keys(generationConfig).length > 0 && generationConfig),
 		...(systemInstruction && { systemInstruction: sanitizeSurrogates(systemInstruction) }),
 		...(currentTools.length > 0 && {

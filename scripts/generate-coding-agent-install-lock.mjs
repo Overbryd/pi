@@ -355,9 +355,13 @@ function validateGeneratedFiles(installerPackageJson, installLock, internalNames
 			}
 
 			const dependencyEntry = installLock.packages[dependencyLockPath];
-			if (isExactVersionSpec(dependencySpec) && dependencyEntry.version !== dependencySpec) {
+			const override =
+				installerPackageJson.overrides?.[`${dependencyName}@${dependencySpec}`] ??
+				installerPackageJson.overrides?.[dependencyName];
+			const expectedSpec = typeof override === "string" && isExactVersionSpec(override) ? override : dependencySpec;
+			if (isExactVersionSpec(expectedSpec) && dependencyEntry.version !== expectedSpec) {
 				errors.push(
-					`${lockPath || "root"} dependency ${dependencyName}@${dependencySpec} resolves to ${dependencyEntry.version}`,
+					`${lockPath || "root"} dependency ${dependencyName}@${expectedSpec} resolves to ${dependencyEntry.version}`,
 				);
 			}
 		}

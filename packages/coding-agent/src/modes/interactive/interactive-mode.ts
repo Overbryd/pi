@@ -2018,6 +2018,12 @@ export class InteractiveMode {
 					void this.flushCompactionQueue({ willRetry: false });
 					return { cancelled: false };
 				},
+				retryLastTurn: async () => {
+					const retry = this.session.retryLastTurn();
+					this.chatContainer.clear();
+					this.renderInitialMessages();
+					await retry;
+				},
 				switchSession: async (sessionPath, options) => {
 					return this.handleResumeSession(sessionPath, options);
 				},
@@ -3744,6 +3750,9 @@ export class InteractiveMode {
 			}
 
 			case "auto_retry_start": {
+				// The failed attempt has already been omitted from model context. Rebuild now so
+				// repeated transient failures appear as one retry indicator, not transcript noise.
+				this.rebuildChatFromMessages();
 				// Set up escape to abort retry
 				this.retryEscapeHandler = this.defaultEditor.onEscape;
 				this.defaultEditor.onEscape = () => {

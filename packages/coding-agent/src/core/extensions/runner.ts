@@ -390,6 +390,7 @@ export class ExtensionRunner {
 	private newSessionHandler: NewSessionHandler = async () => ({ cancelled: false });
 	private forkHandler: ForkHandler = async () => ({ cancelled: false });
 	private navigateTreeHandler: NavigateTreeHandler = async () => ({ cancelled: false });
+	private retryLastTurnHandler: () => Promise<void> = async () => {};
 	private switchSessionHandler: SwitchSessionHandler = async () => ({ cancelled: false });
 	private reloadHandler: ReloadHandler = async () => {};
 	private shutdownHandler: ShutdownHandler = () => {};
@@ -556,6 +557,7 @@ export class ExtensionRunner {
 			this.newSessionHandler = actions.newSession;
 			this.forkHandler = actions.fork;
 			this.navigateTreeHandler = actions.navigateTree;
+			this.retryLastTurnHandler = actions.retryLastTurn ?? (async () => {});
 			this.switchSessionHandler = actions.switchSession;
 			this.reloadHandler = actions.reload;
 			return;
@@ -565,6 +567,7 @@ export class ExtensionRunner {
 		this.newSessionHandler = async () => ({ cancelled: false });
 		this.forkHandler = async () => ({ cancelled: false });
 		this.navigateTreeHandler = async () => ({ cancelled: false });
+		this.retryLastTurnHandler = async () => {};
 		this.switchSessionHandler = async () => ({ cancelled: false });
 		this.reloadHandler = async () => {};
 	}
@@ -1021,6 +1024,10 @@ export class ExtensionRunner {
 		context.navigateTree = (targetId, options) => {
 			this.assertActive();
 			return this.navigateTreeHandler(targetId, options);
+		};
+		context.retryLastTurn = () => {
+			this.assertActive();
+			return this.retryLastTurnHandler();
 		};
 		context.switchSession = (sessionPath, options) => {
 			this.assertActive();

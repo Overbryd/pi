@@ -424,6 +424,9 @@ export interface ExtensionCommandContext extends ExtensionContext {
 		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
 	): Promise<{ cancelled: boolean }>;
 
+	/** Retry the latest failed response in place with the current model and thinking level. */
+	retryLastTurn(): Promise<void>;
+
 	/** Switch to a different session file. */
 	switchSession(
 		sessionPath: string,
@@ -2251,6 +2254,7 @@ export interface ExtensionCommandContextActions {
 		targetId: string,
 		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
 	) => Promise<{ cancelled: boolean }>;
+	retryLastTurn?: () => Promise<void>;
 	switchSession: (
 		sessionPath: string,
 		options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },

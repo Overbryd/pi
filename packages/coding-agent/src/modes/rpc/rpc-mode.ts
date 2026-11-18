@@ -335,6 +335,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					});
 					return { cancelled: result.cancelled };
 				},
+				retryLastTurn: () => session.retryLastTurn(),
 				switchSession: async (sessionPath, options) => {
 					return runtimeHost.switchSession(sessionPath, options);
 				},

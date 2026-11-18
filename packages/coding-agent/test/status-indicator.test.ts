@@ -95,6 +95,18 @@ describe("status indicators", () => {
 		}
 	});
 
+	it("renders unlimited retry progress without a fake maximum", () => {
+		initTheme("dark");
+		vi.useFakeTimers();
+		const tui = { requestRender: vi.fn() } as unknown as TUI;
+		const indicator = new RetryStatusIndicator(tui, 4, -1, 1000);
+		try {
+			expect(stripAnsi(indicator.render(120)[1]!)).toContain("Retrying (4) in 1s");
+		} finally {
+			indicator.dispose();
+		}
+	});
+
 	it("disposes retry countdown updates", () => {
 		initTheme("dark");
 		vi.useFakeTimers();

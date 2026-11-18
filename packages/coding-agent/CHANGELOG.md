@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added `AgentSession.retryLastTurn()` and `ExtensionCommandContext.retryLastTurn()` for retrying the latest failed response in place with the current model
+
+### Changed
+
+- Changed automatic transient-error retries to keep intermediate failures out of the visible transcript and persisted session log; `retry.maxRetries: -1` now retries until success or cancellation
+
 ## [1.3.0] - 2026-10-15
 
 ### New Features

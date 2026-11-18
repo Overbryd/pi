@@ -1146,6 +1146,17 @@ export class AgentSession {
 
 		// Handle session persistence
 		if (event.type === "message_end") {
+			if (event.message.role === "assistant") {
+				const settings = this.settingsManager.getRetrySettings();
+				if (
+					!this._agentRunAbortRequested &&
+					settings.enabled &&
+					(settings.maxRetries === -1 || this._retryAttempt < settings.maxRetries) &&
+					this._isRetryableError(event.message)
+				) {
+					this.sessionManager.beginPersistenceBuffer();
+				}
+			}
 			let entryId: string | undefined;
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
@@ -1202,7 +1213,7 @@ export class AgentSession {
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
 		if (this._agentRunAbortRequested) return false;
 		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled || this._retryAttempt >= settings.maxRetries) {
+		if (!settings.enabled || (settings.maxRetries !== -1 && this._retryAttempt >= settings.maxRetries)) {
 			return false;
 		}
 
@@ -1247,11 +1258,15 @@ export class AgentSession {
 		if (unresolvedProjectedTarget) {
 			throw new Error("Cannot persist recovery omission because a projected message has no source entry");
 		}
-		for (const targetId of targetIds) {
-			if (!targetId) continue;
-			const editId = this.sessionManager.appendContextEdit(targetId, null);
-			const entry = this.sessionManager.getEntry(editId);
-			if (entry) this._emit({ type: "entry_appended", entry });
+		const resolvedTargetIds = targetIds.filter((targetId): targetId is string => !!targetId);
+		if (this.sessionManager.isPersistenceBuffered) {
+			this.sessionManager.flushPersistenceBuffer(resolvedTargetIds);
+		} else {
+			for (const targetId of resolvedTargetIds) {
+				const editId = this.sessionManager.appendContextEdit(targetId, null);
+				const entry = this.sessionManager.getEntry(editId);
+				if (entry) this._emit({ type: "entry_appended", entry });
+			}
 		}
 		this._refreshFinalizedContext();
 	}
@@ -1834,12 +1849,12 @@ export class AgentSession {
 	 * starting another, and an abort requested meanwhile aborts the run as soon as it exists.
 	 * @param onStarted Called once the run's messages are prepared, before the first request.
 	 */
-	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
+	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void, retry = false): Promise<void> {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
 		try {
-			messages = await this._prepareRun(trigger);
+			messages = await this._prepareRun(trigger, retry);
 		} catch (error) {
 			this._isAgentRunActive = false;
 			this._flushPendingBashMessages();
@@ -1860,7 +1875,8 @@ export class AgentSession {
 		// are dropped, so a tool that never registers does not stay pending.
 		this._pendingToolNames.clear();
 		try {
-			await this.agent.prompt(messages);
+			if (messages.length === 0) await this.agent.continue();
+			else await this.agent.prompt(messages);
 			while (!this._agentRunAbortRequested) {
 				if (await this._handlePostAgentRun()) {
 					if (this._agentRunAbortRequested) break;
@@ -1877,6 +1893,7 @@ export class AgentSession {
 			this._runSystemPromptOptions = undefined;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
+			this.sessionManager.flushPersistenceBuffer();
 			await this._emitAgentSettled();
 		}
 	}
@@ -1887,7 +1904,7 @@ export class AgentSession {
 	 * message followed by pending nextTurn messages (consumed here) and handler messages, with a
 	 * system patch first when the prompt changed.
 	 */
-	private async _prepareRun(trigger: BeforeAgentStartTrigger): Promise<AgentMessage[]> {
+	private async _prepareRun(trigger: BeforeAgentStartTrigger, retry = false): Promise<AgentMessage[]> {
 		// Check if we need to compact before sending (catches aborted responses).
 		// The starting message is sent below, so do not call agent.continue() here.
 		const lastAssistant = this._findLastAssistantMessage();
@@ -1908,7 +1925,7 @@ export class AgentSession {
 		const messages: AgentMessage[] = [];
 		if (trigger.messageType === "custom") {
 			messages.push(trigger.message);
-		} else {
+		} else if (!retry) {
 			// Normalize images after before_agent_start so extension-driven model selection
 			// determines the resize profile used for the request and history.
 			const normalized = await this._normalizePromptImages(trigger.images);
@@ -2044,6 +2061,44 @@ export class AgentSession {
 			hints.push(...processed.hints);
 		}
 		return { images: normalizedImages, hints };
+	}
+
+	/**
+	 * Retry the latest failed response with the current model and thinking level.
+	 * The failed response is omitted from context and the active branch continues in place.
+	 */
+	async retryLastTurn(): Promise<void> {
+		if (this.isStreaming) {
+			throw new Error("Wait for the current response to finish before retrying it.");
+		}
+		if (this.isCompacting) {
+			throw new Error("Wait for the current compaction or tree navigation to finish before retrying.");
+		}
+		if (!this.model) {
+			throw new Error(formatNoModelSelectedMessage());
+		}
+
+		const failedResponse = this._findLastAssistantMessage();
+		if (!failedResponse || !["error", "aborted", "length"].includes(failedResponse.stopReason)) {
+			throw new Error("Nothing to retry. The latest response did not fail.");
+		}
+		const userEntry = [...this.sessionManager.getBranch()]
+			.reverse()
+			.find((entry) => entry.type === "message" && entry.message.role === "user");
+		if (!userEntry || userEntry.type !== "message" || userEntry.message.role !== "user") {
+			throw new Error("Nothing to retry. Send a prompt first.");
+		}
+
+		this._omitRecoveryAttempt(failedResponse);
+
+		const userText = contentText(userEntry.message.content, "");
+		const imageContent =
+			typeof userEntry.message.content === "string"
+				? []
+				: userEntry.message.content.filter((item): item is ImageContent => item.type === "image");
+		const images = imageContent.length > 0 ? imageContent : undefined;
+
+		await this._startRun({ messageType: "user", prompt: userText, images }, undefined, true);
 	}
 
 	/**
@@ -3797,13 +3852,17 @@ export class AgentSession {
 
 		this._retryAttempt++;
 
-		if (this._retryAttempt > settings.maxRetries) {
+		if (settings.maxRetries !== -1 && this._retryAttempt > settings.maxRetries) {
 			// Preserve the completed attempt count so post-run handling can emit the final failure.
 			this._retryAttempt--;
 			return false;
 		}
 
 		const delayMs = retryDelayMs(settings, this._retryAttempt);
+
+		// Omit the failed attempt before announcing the retry so transcript renderers can
+		// replace the error with one persistent backoff indicator.
+		this._omitRecoveryAttempt(message);
 
 		this._emit({
 			type: "auto_retry_start",
@@ -3812,9 +3871,6 @@ export class AgentSession {
 			delayMs,
 			errorMessage: message.errorMessage || "Unknown error",
 		});
-
-		// Keep the failed attempt in raw history while durably omitting it from model projection.
-		this._omitRecoveryAttempt(message);
 
 		// Wait with exponential backoff (abortable)
 		this._retryAbortController = new AbortController();

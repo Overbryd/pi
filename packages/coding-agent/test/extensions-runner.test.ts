@@ -1244,6 +1244,26 @@ describe("ExtensionRunner", () => {
 			await commandContext.fork("entry-2", { position: "at" });
 			expect(fork).toHaveBeenLastCalledWith("entry-2", { position: "at" });
 		});
+
+		it("passes retryLastTurn through to the bound handler", async () => {
+			const runtime = createExtensionRuntime();
+			const runner = new ExtensionRunner([], runtime, tempDir, sessionManager, modelRegistry);
+			const retryLastTurn = vi.fn(async () => {});
+
+			runner.bindCommandContext({
+				waitForIdle: async () => {},
+				newSession: async () => ({ cancelled: false }),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: async () => ({ cancelled: false }),
+				retryLastTurn,
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			});
+
+			await runner.createCommandContext().retryLastTurn();
+
+			expect(retryLastTurn).toHaveBeenCalledOnce();
+		});
 	});
 
 	// #8967: event handler unsubscription must not disturb other registrations.

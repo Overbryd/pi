@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const googleGenAiMock = vi.hoisted(() => ({
 	constructorCalls: [] as Array<Record<string, unknown>>,
+	requestCalls: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@google/genai", () => {
 	class GoogleGenAI {
 		models = {
-			generateContentStream: async function* () {
+			generateContentStream: async function* (params: Record<string, unknown>) {
+				googleGenAiMock.requestCalls.push(params);
 				yield {
 					responseId: "vertex-response-id",
 					candidates: [
@@ -48,6 +50,7 @@ vi.mock("@google/genai", () => {
 
 import { stream as streamGoogleVertex } from "../src/api/google-vertex.ts";
 import { getModel, normalizeContext } from "../src/compat.ts";
+import { googleVertexProvider } from "../src/providers/google-vertex.ts";
 import type { Model } from "../src/types.ts";
 
 const PI_USER_AGENT = `pi (${platform()} ${release()}; ${arch()})`;
@@ -60,10 +63,20 @@ const originalGoogleCloudApiKey = process.env.GOOGLE_CLOUD_API_KEY;
 
 beforeEach(() => {
 	googleGenAiMock.constructorCalls.length = 0;
+	googleGenAiMock.requestCalls.length = 0;
+	for (const name of [
+		"GOOGLE_CLOUD_PROJECT",
+		"GCLOUD_PROJECT",
+		"GOOGLE_CLOUD_LOCATION",
+		"GOOGLE_APPLICATION_CREDENTIALS",
+	]) {
+		vi.stubEnv(name, undefined);
+	}
 	delete process.env.GOOGLE_CLOUD_API_KEY;
 });
 
 afterEach(() => {
+	vi.unstubAllEnvs();
 	if (originalGoogleCloudApiKey === undefined) {
 		delete process.env.GOOGLE_CLOUD_API_KEY;
 	} else {
@@ -145,6 +158,58 @@ describe("google-vertex api key resolution", () => {
 		});
 		expect(googleGenAiMock.constructorCalls[0]).not.toHaveProperty("project");
 		expect(googleGenAiMock.constructorCalls[0]).not.toHaveProperty("location");
+	});
+
+	it("keeps scoped routing in native API-key authentication results", async () => {
+		const env = { GOOGLE_CLOUD_PROJECT: "test-project", GOOGLE_CLOUD_LOCATION: "global" };
+		const result = await googleVertexProvider().auth.apiKey?.resolve({
+			credential: { type: "api_key", key: "test-key", env },
+			ctx: { env: async () => undefined },
+			signal: new AbortController().signal,
+		} as never);
+		expect(result).toMatchObject({ auth: { apiKey: "test-key" }, env });
+	});
+
+	it("preserves provider-scoped global routing when an API key is configured", async () => {
+		vi.stubEnv("GOOGLE_CLOUD_PROJECT", "wrong-project");
+		vi.stubEnv("GOOGLE_CLOUD_LOCATION", "europe-west1");
+		await streamGoogleVertex(model, context, {
+			apiKey: "test-key",
+			env: {
+				GOOGLE_CLOUD_PROJECT: "test-project",
+				GOOGLE_CLOUD_LOCATION: "global",
+				GOOGLE_APPLICATION_CREDENTIALS: "/unused/adc.json",
+			},
+		}).result();
+		expect(googleGenAiMock.constructorCalls[0]).toMatchObject({
+			apiKey: "test-key",
+			project: "test-project",
+			location: "global",
+		});
+		expect(googleGenAiMock.constructorCalls[0]).not.toHaveProperty("googleAuthOptions");
+	});
+
+	it("uses an environment API key before ADC, including when the caller passes an ADC marker", async () => {
+		await streamGoogleVertex(model, context, {
+			apiKey: "<authenticated>",
+			env: {
+				GOOGLE_CLOUD_API_KEY: "environment-key",
+				GOOGLE_CLOUD_PROJECT: "test-project",
+				GOOGLE_CLOUD_LOCATION: "global",
+				GOOGLE_APPLICATION_CREDENTIALS: "/unused/adc.json",
+			},
+		}).result();
+		expect(googleGenAiMock.constructorCalls[0]).toMatchObject({
+			apiKey: "environment-key",
+			project: "test-project",
+			location: "global",
+		});
+		expect(googleGenAiMock.constructorCalls[0]).not.toHaveProperty("googleAuthOptions");
+	});
+
+	it("passes a configured timeout to the Google request", async () => {
+		await streamGoogleVertex(model, context, { apiKey: "test-key", timeoutMs: 120_000 }).result();
+		expect(googleGenAiMock.requestCalls[0]).toMatchObject({ config: { httpOptions: { timeout: 120_000 } } });
 	});
 
 	it("does not forward generated Vertex base URL placeholders", async () => {

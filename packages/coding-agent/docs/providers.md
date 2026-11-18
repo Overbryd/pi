@@ -230,7 +230,9 @@ Use a Google Cloud API key:
 export GOOGLE_CLOUD_API_KEY=...
 ```
 
-To use Application Default Credentials, configure a project and location:
+A configured API key takes precedence over Application Default Credentials. When a project and location are configured, API-key requests use that routing too. For example, use `GOOGLE_CLOUD_LOCATION=global` for models available only on the global endpoint. Without project/location configuration, API-key requests use Vertex Express routing. A rejected API key does not silently fall back to ADC.
+
+When no API key is configured, use Application Default Credentials with a project and location:
 
 ```bash
 export GOOGLE_CLOUD_PROJECT=your-project

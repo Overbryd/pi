@@ -90,6 +90,26 @@ describe("http dispatcher", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("preserves custom TLS verification when Agent creates an origin dispatcher", async () => {
+		// GHSA-2m5v-pch6-74hx / CVE-2026-109383: JSON cloning must not drop certificate pinning.
+		const checkServerIdentity = () => new Error("Certificate pin rejected");
+		const factory = vi.fn(() => {
+			throw new Error("Dispatch captured before connecting");
+		});
+		// Exercise the legacy runtime option, which is intentionally excluded from current types.
+		const options = { tls: { checkServerIdentity }, factory } as unknown as undici.Agent.Options;
+		const agent = new undici.Agent(options);
+		try {
+			await expect(undici.fetch("https://example.invalid", { dispatcher: agent })).rejects.toThrow();
+			expect(factory).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({ tls: expect.objectContaining({ checkServerIdentity }) }),
+			);
+		} finally {
+			await agent.close();
+		}
+	});
+
 	it("tunnels proxied HTTP origins", async () => {
 		const origin = http.createServer((_request, response) => {
 			response.end("origin");

@@ -91,6 +91,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 					});
 					return { cancelled: result.cancelled };
 				},
+				retryLastTurn: () => session.retryLastTurn(),
 				switchSession: async (sessionPath, switchOptions) => {
 					return runtimeHost.switchSession(sessionPath, switchOptions);
 				},
